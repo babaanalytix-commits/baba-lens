@@ -22,8 +22,8 @@ Deployed 2026-09-23 through the deterministic deployment proxy
 | HyperEVM | 999 | `0x29c361def3be0e569b29b84403c0ee824a26ece6c85727bba1ceecaff7bdf749` | 46,666,726 |
 
 On each chain the deployed code is byte-identical to the runtime the acceptance tests ran, checked on
-two RPCs per chain with `acceptance/deploy_check.py post`. Source is published on
-[Sourcify](https://sourcify.dev) as an exact match on all four chains.
+two RPCs per chain with `acceptance/deploy_check.py post`. Source is published as an exact match on
+[Sourcify](https://sourcify.dev) and on each chain's explorer: [Base](https://basescan.org/address/0xADebbd5825B033bCD4B84FB019AbFC673406d902#code), [Arc](https://arc.etherscan.io/address/0xADebbd5825B033bCD4B84FB019AbFC673406d902#code), [Robinhood Chain](https://robin.etherscan.io/address/0xADebbd5825B033bCD4B84FB019AbFC673406d902#code), [HyperEVM](https://hyperevmscan.io/address/0xADebbd5825B033bCD4B84FB019AbFC673406d902#code).
 
 ## What it returns
 
