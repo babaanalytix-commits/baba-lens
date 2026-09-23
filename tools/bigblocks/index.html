@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PoolLens Deploy Desk</title>
+<style>
+  :root { --bg:#fbfaf7; --fg:#1d1c1a; --mut:#6b675f; --line:#dedad2; --ok:#1f7a45; --bad:#b3261e; --card:#fff; --acc:#2d4a8a; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#161513; --fg:#ece8e1; --mut:#a39e94; --line:#34312c; --ok:#5cc28a; --bad:#ff8a80; --card:#1f1d1a; --acc:#8fb0ff; } }
+  body { background:var(--bg); color:var(--fg); font:15px/1.5 -apple-system, "Segoe UI", sans-serif; margin:0; }
+  main { max-width:760px; margin:0 auto; padding:24px 16px 64px; }
+  h1 { font-size:22px; margin:0 0 4px; } h2 { font-size:16px; margin:0 0 6px; }
+  p.lead { color:var(--mut); margin:0 0 20px; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:14px 16px; margin:12px 0; }
+  code, .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size:13px; word-break:break-all; }
+  button { font:inherit; padding:7px 14px; border-radius:6px; border:1px solid var(--acc); background:var(--acc); color:#fff; cursor:pointer; }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  input { font:inherit; font-family:ui-monospace, Menlo, monospace; font-size:13px; width:100%; box-sizing:border-box; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px; }
+  .ok { color:var(--ok); } .bad { color:var(--bad); } .mut { color:var(--mut); font-size:13px; }
+  pre { background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:8px; overflow-x:auto; font-size:12px; margin:8px 0 0; white-space:pre-wrap; word-break:break-all; }
+</style>
+</head>
+<body>
+<main>
+  <h1>PoolLens Deploy Desk</h1>
+  <p class="lead">Runs on this machine only. Your wallet signs every step and your key never leaves it.
+  The HyperEVM big-block switch uses a temporary agent key that lives in this tab's memory, expires
+  within 60 minutes and is never saved or shown.</p>
+
+  <section>
+    <h2>0 · Wallet</h2>
+    <div class="mut">Deploying address (compared in full with the connected account)</div>
+    <input id="expected" value="0xcCf8f9e4c7Ce491f379a3Fe26718b036AC752De8">
+    <div class="row"><button id="connect">Connect wallet</button><span id="acct" class="mono"></span></div>
+    <div id="chain" class="mut"></div>
+  </section>
+
+  <section>
+    <h2>1 · HyperCore account <span class="mut">(HyperEVM only)</span></h2>
+    <div class="mut">Big blocks can only be switched on by an address that holds something on HyperCore.
+    Sending HYPE to the system address <code>0x2222…2222</code> moves it to your own HyperCore balance
+    (Hyperliquid docs, "HyperCore ↔ HyperEVM transfers"). It's an ordinary transaction that your wallet shows in full.</div>
+    <div class="row"><span>HyperCore status:</span><b id="role">—</b><button id="refreshRole">Refresh</button></div>
+    <div class="row"><input id="hypeAmt" value="0.001" style="width:120px"><span class="mut">HYPE</span><button id="toCore" disabled>Send to HyperCore</button></div>
+    <pre id="coreOut" hidden></pre>
+  </section>
+
+  <section>
+    <h2>2 · Temporary agent <span class="mut">(HyperEVM only)</span></h2>
+    <div class="mut">Your wallet signs <code>ApproveAgent</code>, which it displays field by field: agent address,
+    name with its expiry, nonce, "Mainnet". The agent can sign Hyperliquid actions for this account until it
+    expires. Withdrawals and transfers need your wallet's own signature.</div>
+    <div class="row"><button id="approve" disabled>Create agent and approve it</button></div>
+    <pre id="agentOut" hidden></pre>
+  </section>
+
+  <section>
+    <h2>3 · Big blocks <span class="mut">(HyperEVM only)</span></h2>
+    <div class="mut">The agent signs <code>evmUserModify</code>. The wallet isn't asked. The result is read back
+    from the chain with <code>eth_usingBigBlocks</code>, not taken from the reply.</div>
+    <div class="row"><button id="bigOn" disabled>Switch to big blocks</button><button id="bigOff" disabled>Switch back to small blocks</button></div>
+    <pre id="bigOut" hidden></pre>
+  </section>
+
+  <section>
+    <h2>4 · Deploy PoolLens <span class="mut">(any of the four chains)</span></h2>
+    <div class="mut">Sends <code>salt ‖ initcode</code> from <code>out/PoolLens.sol/PoolLens.json</code> to the
+    deterministic deployment proxy. Before you confirm, copy the destination and data <b>as the wallet shows
+    them</b> and run <code>deploy_check.py pre</code>. Confirm only on GO.</div>
+    <pre id="deployInfo">loading build…</pre>
+    <div class="row"><button id="deploy" disabled>Send deploy transaction</button></div>
+    <pre id="deployOut" hidden></pre>
+  </section>
+</main>
+
+<script src="vendor/ethers.umd.min.js"></script>
+<script src="hl.js"></script>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const API = "https://api.hyperliquid.xyz";
+const HYPEREVM = 999, DEPLOYER = "0x4e59b44847b379578588920cA78FbF26c0B4956C";
+const HYPE_SYSTEM = "0x2222222222222222222222222222222222222222";
+const CHAINS = { 8453: "Base", 999: "HyperEVM", 5042: "Arc", 4663: "Robinhood Chain" };
+let provider, signer, account, chainId, agent = null, calldata = null;
+
+function show(id, text, cls) { const el = $(id); el.hidden = false; el.textContent = text; el.className = cls || ""; }
+async function info(body) {
+  const r = await fetch(API + "/info", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  return r.json();
+}
+async function usingBigBlocks(addr) {
+  const r = await fetch("https://rpc.hyperliquid.xyz/evm", { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_usingBigBlocks", params: [addr] }) });
+  return (await r.json()).result;
+}
+async function exchange(body) {
+  const r = await fetch(API + "/exchange", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  return r.json();
+}
+function matches() { return account && account.toLowerCase() === $("expected").value.trim().toLowerCase(); }
+
+function refreshButtons() {
+  const ok = matches(), onHyper = chainId === HYPEREVM;
+  $("toCore").disabled = !(ok && onHyper);
+  $("approve").disabled = !(ok && onHyper);
+  $("bigOn").disabled = $("bigOff").disabled = !(ok && agent);
+  $("deploy").disabled = !(ok && calldata && CHAINS[chainId]);
+}
+
+async function refreshRole() {
+  if (!account) return;
+  const r = await info({ type: "userRole", user: account });
+  $("role").textContent = r.role === "missing" ? "not a HyperCore account yet" : ("HyperCore account (" + r.role + ")");
+  $("role").className = r.role === "missing" ? "bad" : "ok";
+}
+
+async function connect() {
+  if (!window.ethereum) { $("acct").textContent = "No browser wallet found in this browser."; $("acct").className = "bad"; return; }
+  provider = new ethers.BrowserProvider(window.ethereum);
+  await provider.send("eth_requestAccounts", []);
+  signer = await provider.getSigner();
+  account = await signer.getAddress();
+  chainId = Number((await provider.getNetwork()).chainId);
+  $("acct").textContent = account + (matches() ? "  ✓ matches" : "  ✗ does NOT match the deploying address");
+  $("acct").className = "mono " + (matches() ? "ok" : "bad");
+  $("chain").textContent = "Chain: " + chainId + (CHAINS[chainId] ? " (" + CHAINS[chainId] + ")" : " (not one of the four)");
+  await refreshRole();
+  refreshButtons();
+}
+
+async function toCore() {
+  const value = ethers.parseEther($("hypeAmt").value.trim());
+  const tx = await signer.sendTransaction({ to: HYPE_SYSTEM, value });
+  show("coreOut", "sent " + tx.hash + " — waiting for it to land…");
+  const rc = await tx.wait();
+  show("coreOut", "landed in block " + rc.blockNumber + " (status " + rc.status + "). Checking HyperCore…");
+  for (let i = 0; i < 20; i++) { await refreshRole(); if ($("role").className === "ok") break; await new Promise(r => setTimeout(r, 3000)); }
+  show("coreOut", "tx " + tx.hash + " landed; HyperCore status: " + $("role").textContent, $("role").className);
+}
+
+async function approveAgent() {
+  const a = ethers.Wallet.createRandom();
+  const nonce = Date.now();
+  const until = nonce + 60 * 60 * 1000;
+  const act = HL.approveAgentAction(a.address, "lensdeploy valid_until " + until, nonce, "0x" + HYPEREVM.toString(16));
+  const td = HL.approveAgentTypedData(act);
+  const sig = HL.splitSig(ethers, await signer.signTypedData(td.domain, td.types, td.message));
+  const res = await exchange({ action: act, nonce, signature: sig });
+  if (res.status !== "ok") { show("agentOut", "Hyperliquid refused: " + JSON.stringify(res), "bad"); return; }
+  agent = a;
+  const listed = (await info({ type: "extraAgents", user: account })).filter(x => x.address.toLowerCase() === a.address.toLowerCase());
+  show("agentOut", "agent registered: " + a.address + "\nexpires " + new Date(until).toISOString() +
+       "\nHyperliquid lists it as: " + JSON.stringify(listed), "ok");
+  refreshButtons();
+}
+
+async function setBig(on) {
+  const nonce = Date.now();
+  const td = HL.l1TypedData(ethers, on, nonce);
+  const sig = HL.splitSig(ethers, await agent.signTypedData(td.domain, td.types, td.message));
+  const res = await exchange({ action: { type: "evmUserModify", usingBigBlocks: on }, nonce, signature: sig, vaultAddress: null });
+  let chain = null;
+  for (let i = 0; i < 10; i++) { chain = await usingBigBlocks(account); if (chain === on) break; await new Promise(r => setTimeout(r, 2000)); }
+  show("bigOut", "Hyperliquid replied " + JSON.stringify(res) + "\nHyperEVM eth_usingBigBlocks(" + account + ") = " + chain +
+       (chain === on ? "  ✓" : "  ✗ the chain does not show the change"), chain === on ? "ok" : "bad");
+}
+
+async function loadBuild() {
+  try {
+    const art = await (await fetch("../../out/PoolLens.sol/PoolLens.json")).json();
+    const init = art.bytecode.object;
+    const salt = ethers.id("baba-lens/PoolLens/v1");
+    calldata = ethers.concat([salt, init]);
+    const addr = ethers.getCreate2Address(DEPLOYER, salt, ethers.keccak256(init));
+    $("deployInfo").textContent = "to        " + DEPLOYER + "\nvalue     0\ndata      " + ((calldata.length - 2) / 2) +
+      " bytes, keccak " + ethers.keccak256(calldata) + "\ninitcode  keccak " + ethers.keccak256(init) + "\nlens at   " + addr;
+  } catch (e) {
+    $("deployInfo").textContent = "Could not load out/PoolLens.sol/PoolLens.json — run `forge build` and serve the repo root.";
+    $("deployInfo").className = "bad";
+  }
+  refreshButtons();
+}
+
+async function deploy() {
+  const tx = await signer.sendTransaction({ to: DEPLOYER, data: calldata, value: 0 });
+  show("deployOut", "sent " + tx.hash + " on chain " + chainId + " — waiting…");
+  const rc = await tx.wait();
+  show("deployOut", "landed in block " + rc.blockNumber + ", status " + rc.status +
+       "\nnow run: python3 acceptance/deploy_check.py post " +
+       ({ 8453: "base", 999: "hyperevm", 5042: "arc", 4663: "robinhood" })[chainId], rc.status === 1 ? "ok" : "bad");
+}
+
+const guard = (fn, out) => async () => { try { await fn(); } catch (e) { show(out, (e && (e.shortMessage || e.message)) || String(e), "bad"); } };
+$("connect").onclick = guard(connect, "chain");
+$("refreshRole").onclick = guard(refreshRole, "coreOut");
+$("toCore").onclick = guard(toCore, "coreOut");
+$("approve").onclick = guard(approveAgent, "agentOut");
+$("bigOn").onclick = guard(() => setBig(true), "bigOut");
+$("bigOff").onclick = guard(() => setBig(false), "bigOut");
+$("deploy").onclick = guard(deploy, "deployOut");
+$("expected").oninput = () => { if (account) connect(); };
+if (window.ethereum) {
+  window.ethereum.on && window.ethereum.on("chainChanged", () => connect());
+  window.ethereum.on && window.ethereum.on("accountsChanged", () => connect());
+}
+loadBuild();
+</script>
+</body>
+</html>

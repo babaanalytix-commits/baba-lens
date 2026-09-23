@@ -1,0 +1,32 @@
+name: CI
+
+permissions: {}
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: build, offline tests, bytecode audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Build (pinned solc 0.8.26, paris, via-ir)
+        run: forge build --sizes
+
+      - name: Offline unit tests
+        run: forge test -vvv
+
+      - name: Bytecode audit (no SSTORE/CALL/DELEGATECALL/CREATE/SELFDESTRUCT/LOG, view-only ABI)
+        run: python3 acceptance/bytecode_audit.py
